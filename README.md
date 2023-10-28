@@ -1,5 +1,5 @@
 - 👋 Hi, I’m @NotMarkZuck
-- 👀 I’m interested in art, machine learning, ai, art and ai.
+- 👀 I’m interested in art, machine learning, ai, art and ai and BIG NUMBERS!
 - 🌱 I’m currently learning python
 - 💞️ I’m looking to collaborate on anything fun and gamechanging
 
