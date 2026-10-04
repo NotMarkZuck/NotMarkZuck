@@ -4,8 +4,8 @@ import Rhino.Geometry as rg
 import rhinoscriptsyntax as rs
 from System.Collections.Generic import List
 
-STRETCH = True      # True = stretch your Rhino arm in height so its top lands on the skin
-ARM_W = 1.5 / 12.0  # fallback arm box (only used when 'arm' is empty)
+STRETCH = True
+ARM_W = 1.5 / 12.0
 ARM_D = 3.5 / 12.0
 
 tol = Rhino.RhinoDoc.ActiveDoc.ModelAbsoluteTolerance
@@ -24,7 +24,6 @@ def unit(a):
     return mul(a, 1.0 / l) if l > 1e-12 else None
 
 def circ(c):
-    # centre, radius, in-plane axes and three points of an arc
     p1, p2, p3 = V(c.PointAtStart), V(c.PointAt(c.Domain.Mid)), V(c.PointAtEnd)
     a_, b_ = sub(p2, p1), sub(p3, p1)
     n_ = cross(a_, b_)
@@ -33,7 +32,6 @@ def circ(c):
     return cen, dot(sub(p1, cen), sub(p1, cen)) ** 0.5, X, cross(Z, X), Z, (p1, p2, p3)
 
 def span(pts, cen, X, Y):
-    # start angle and counter-clockwise sweep of an arc, in the ring's plane
     s, m, e = [math.atan2(dot(sub(p, cen), Y), dot(sub(p, cen), X)) % TAU for p in pts]
     if (m - s) % TAU <= (e - s) % TAU: return s, (e - s) % TAU
     return e, (s - e) % TAU
@@ -43,7 +41,7 @@ def ring_info(ringcrv, skincrv):
     r0, rs = span(rp, cen, X, Y)
     scen, sR, _, _, _, sp = circ(skincrv)
     s0, ss = span(sp, cen, X, Y)
-    lo, hi = 0.0, rs                      # where the skin covers this ring = where boards survive the shave
+    lo, hi = 0.0, rs
     best = None
     for k in (-1, 0, 1):
         a0 = max(0.0, (s0 - r0) % TAU + k * TAU)
@@ -54,11 +52,10 @@ def ring_info(ringcrv, skincrv):
 
 def u_of(p, F):
     u = (math.atan2(dot(sub(p, F['cen']), F['Y']), dot(sub(p, F['cen']), F['X'])) - F['r0']) % TAU
-    if u > F['rs'] + (TAU - F['rs']) / 2: u -= TAU   # a board sitting exactly on the arc start
+    if u > F['rs'] + (TAU - F['rs']) / 2: u -= TAU
     return u
 
 def rail_positions(F_list, boards_u, N, w):
-    # window = the biggest gap between neighbouring boards, anywhere on the bridge
     kb, best = None, 1.5
     for U in boards_u:
         gaps = [U[i + 1] - U[i] for i in range(len(U) - 1)]
@@ -98,7 +95,6 @@ def hit(q, dvec, o, n_):
     return add(q, mul(dvec, s))
 
 def plank_corners(fa, fb, W, T):
-    # flat mitred segment between two rib planes; returns the 6 faces as corner quads
     (oa, _, ta, za), (ob, _, tb, zb) = fa, fb
     xp = unit(sub(ob, oa))
     if xp is None: return None
@@ -115,7 +111,6 @@ def plank_corners(fa, fb, W, T):
             (A[-1,-1], A[-1,1], A[1,1], A[1,-1]), (B[-1,-1], B[1,-1], B[1,1], B[-1,1])]
 
 def arm_frame(F, u, H):
-    # base on the rail's outer face, pointing at the skin; returns base, outward dir, tangent, length
     p, d, tg, Z = frame_at(F, u)
     if F['sR'] < F['R']: d = mul(d, -1)
     base = add(p, mul(d, H / 2.0))
