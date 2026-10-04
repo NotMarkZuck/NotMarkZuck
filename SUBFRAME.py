@@ -5,6 +5,8 @@ import rhinoscriptsyntax as rs
 from System.Collections.Generic import List
 
 STRETCH = True
+ARMS_TO_SKIN = False
+BOARD_T = 0.5 / 12.0
 ARM_W = 1.5 / 12.0
 ARM_D = 3.5 / 12.0
 
@@ -65,7 +67,7 @@ def rail_positions(F_list, boards_u, N, w):
             if med > 1e-12 and g / med > best: kb, best = i, g / med
     rows = []
     for F, U in zip(F_list, boards_u):
-        ins = (w / 2.0) / F['R']
+        ins = F.get('ins', (w / 2.0) / F['R'])
         lo, hi = F['lo'] + ins, F['hi'] - ins
         if kb is None:
             rows.append(('even', lo, hi)); continue
@@ -112,6 +114,10 @@ def plank_corners(fa, fb, W, T):
 
 def arm_frame(F, u, H):
     p, d, tg, Z = frame_at(F, u)
+    if not ARMS_TO_SKIN:
+        L = F['top'] - (F['R'] + H / 2.0)
+        if L <= 1e-6: return None
+        return add(p, mul(d, H / 2.0)), d, cross(Z, d), Z, L
     if F['sR'] < F['R']: d = mul(d, -1)
     base = add(p, mul(d, H / 2.0))
     w_ = sub(base, F['scen'])
@@ -136,6 +142,21 @@ count = min(len(rings), len(skins), len(pts))
 
 F = [ring_info(rings[k], skins[k]) for k in range(count)]
 BU = [[u_of(p, F[k]) for p in pts[k]] for k in range(count)]
+
+try: shaves = [rs.coercebrep(b_) for b_ in (shave if hasattr(shave, '__iter__') else [shave]) if b_ is not None]
+except NameError: shaves = []
+def kept(p):
+    q = rg.Point3d(*p)
+    return any(b_.IsPointInside(q, tol, False) for b_ in shaves)
+for k in range(count):
+    F[k]['top'] = sum(dot(sub(p, F[k]['cen']), sub(p, F[k]['cen'])) ** 0.5 for p in pts[k]) / len(pts[k]) - BOARD_T / 2.0
+    if not shaves: continue
+    nb = len(pts[k])
+    first = next((i for i in range(nb) if kept(pts[k][i])), None)
+    if first is None: continue
+    last = next(i for i in reversed(range(nb)) if kept(pts[k][i]))
+    F[k]['lo'], F[k]['hi'] = min(BU[k][first], BU[k][last]), max(BU[k][first], BU[k][last])
+    F[k]['ins'] = 0.0
 U, kb = rail_positions(F, BU, N, W)
 
 def P3(t): return rg.Point3d(*t)
