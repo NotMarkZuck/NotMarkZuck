@@ -144,6 +144,70 @@ for k in range(count):
     F[k]['ins'] = 0.0
 U, kb = rail_positions(F, BU, N, W)
 
+try: holes = [rs.coercebrep(b_) for b_ in (hole if hasattr(hole, '__iter__') else [hole]) if b_ is not None]
+except NameError: holes = []
+hole_boxes = [(b_, b_.GetBoundingBox(True)) for b_ in holes]
+def in_hole(p):
+    q = rg.Point3d(*p)
+    return any(bb.Contains(q) and b_.IsPointInside(q, tol, False) for b_, bb in hole_boxes)
+
+def hole_span(Fk, rb):
+    def at(u):
+        th = Fk['r0'] + u
+        return add(Fk['cen'], mul(add(mul(Fk['X'], math.cos(th)), mul(Fk['Y'], math.sin(th))), rb))
+    steps = max(int(Fk['rs'] / math.radians(0.5)), 2)
+    us = [Fk['rs'] * i / steps for i in range(steps + 1)]
+    ins = [in_hole(at(u)) for u in us]
+    runs, i = [], 0
+    while i < len(us):
+        if ins[i]:
+            j = i
+            while j + 1 < len(us) and ins[j + 1]: j += 1
+            runs.append((i, j)); i = j + 1
+        else: i += 1
+    if not runs: return None
+    i, j = max(runs, key=lambda r: r[1] - r[0])
+    def edge(u_out, u_in):
+        for _ in range(12):
+            m = 0.5 * (u_out + u_in)
+            if in_hole(at(m)): u_in = m
+            else: u_out = m
+        return u_in
+    a_ = edge(us[i - 1], us[i]) if i > 0 else us[i]
+    b_ = edge(us[j + 1], us[j]) if j + 1 < len(us) else us[j]
+    return a_, b_
+
+if hole_boxes:
+    for k in range(count):
+        rb = sum(dot(sub(p, F[k]['cen']), sub(p, F[k]['cen'])) ** 0.5 for p in pts[k]) / len(pts[k])
+        F[k]['hole'] = hole_span(F[k], rb)
+    hole_rings = [k for k in range(count) if F[k].get('hole')]
+    if hole_rings:
+        nr = len(U[0])
+        hit_ = {}
+        for k in hole_rings:
+            a_, b_ = F[k]['hole']
+            c_ = (W / 2.0) / F[k]['R']
+            for j in range(nr):
+                if a_ - c_ < U[k][j] < b_ + c_:
+                    hit_[j] = hit_.get(j, 0.0) + U[k][j] - 0.5 * (a_ + b_)
+        if hit_:
+            split = min(hit_) + sum(1 for v_ in hit_.values() if v_ < 0)
+        else:
+            split = sum(1 for j in range(nr) if sum(U[k][j] - 0.5 * sum(F[k]['hole']) for k in hole_rings) < 0)
+        for k in hole_rings:
+            a_, b_ = F[k]['hole']
+            c_ = (W / 2.0) / F[k]['R']
+            gap = 2.0 * W / F[k]['R']
+            lim = a_ - c_
+            for j in range(split - 1, -1, -1):
+                if U[k][j] <= lim: break
+                U[k][j] = lim; lim -= gap
+            lim = b_ + c_
+            for j in range(split, nr):
+                if U[k][j] >= lim: break
+                U[k][j] = lim; lim += gap
+
 def P3(t): return rg.Point3d(*t)
 
 # ---------- rails: flat mitred segments, continuous end to end ----------
