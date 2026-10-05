@@ -4,9 +4,7 @@ import Rhino.Geometry as rg
 import rhinoscriptsyntax as rs
 from System.Collections.Generic import List
 
-STRETCH = True
-ARMS_TO_SKIN = False
-BOARD_T = 0.5 / 12.0
+ARM_H = 6.0 / 12.0
 ARM_W = 1.5 / 12.0
 ARM_D = 3.5 / 12.0
 
@@ -114,19 +112,7 @@ def plank_corners(fa, fb, W, T):
 
 def arm_frame(F, u, H):
     p, d, tg, Z = frame_at(F, u)
-    if not ARMS_TO_SKIN:
-        L = F['top'] - (F['R'] + H / 2.0)
-        if L <= 1e-6: return None
-        return add(p, mul(d, H / 2.0)), d, cross(Z, d), Z, L
-    if F['sR'] < F['R']: d = mul(d, -1)
-    base = add(p, mul(d, H / 2.0))
-    w_ = sub(base, F['scen'])
-    bq = dot(w_, d); cq = dot(w_, w_) - F['sR'] ** 2
-    disc = bq * bq - cq
-    if disc < 0: return None
-    L = -bq + disc ** 0.5
-    if L <= 1e-6: return None
-    return base, d, cross(Z, d), Z, L
+    return add(p, mul(d, H / 2.0)), d, cross(Z, d), Z
 
 # ---------- inputs ----------
 if not hasattr(boards, 'Branches'):
@@ -137,7 +123,7 @@ pts = [[V(rs.coerce3dpoint(p)) for p in br] for br in boards.Branches]
 N, W, H = int(round(float(one(n)))), float(one(w)), float(one(h))
 try: arm_brep = rs.coercebrep(one(arm)) if arm else None
 except NameError: arm_brep = None
-arm_len = arm_brep.GetBoundingBox(True).Max.Z if arm_brep else 0
+arm_h = arm_brep.GetBoundingBox(True).Max.Z if arm_brep else ARM_H
 count = min(len(rings), len(skins), len(pts))
 
 F = [ring_info(rings[k], skins[k]) for k in range(count)]
@@ -149,7 +135,6 @@ def kept(p):
     q = rg.Point3d(*p)
     return any(b_.IsPointInside(q, tol, False) for b_ in shaves)
 for k in range(count):
-    F[k]['top'] = sum(dot(sub(p, F[k]['cen']), sub(p, F[k]['cen'])) ** 0.5 for p in pts[k]) / len(pts[k]) - BOARD_T / 2.0
     if not shaves: continue
     nb = len(pts[k])
     first = next((i for i in range(nb) if kept(pts[k][i])), None)
@@ -178,20 +163,26 @@ for j in range(len(U[0])):
             if b.SolidOrientation == rg.BrepSolidOrientation.Inward: b.Flip()
             rails.append(b)
 
-# ---------- arms: one on every rail at every rib ----------
+# ---------- arms: your Rhino arm, unchanged, standing on every rail at every rib ----------
 arms = []
 for k in range(count):
     for u in U[k]:
-        r_ = arm_frame(F[k], u, H)
-        if not r_: continue
-        base, d, tg, Z, L = r_
+        base, d, tg, Z = arm_frame(F[k], u, H)
         up = rg.Plane(P3(base), rg.Vector3d(*tg), rg.Vector3d(*Z))
         if arm_brep:
             g = arm_brep.DuplicateBrep()
-            if STRETCH and arm_len > 1e-9:
-                g.Transform(rg.Transform.Scale(rg.Plane.WorldXY, 1, 1, L / arm_len))
             g.Transform(rg.Transform.PlaneToPlane(rg.Plane.WorldXY, up))
             arms.append(g)
         else:
             arms.append(rg.Box(up, rg.Interval(-ARM_W / 2, ARM_W / 2),
-                               rg.Interval(-ARM_D / 2, ARM_D / 2), rg.Interval(0, L)).ToBrep())
+                               rg.Interval(-ARM_D / 2, ARM_D / 2), rg.Interval(0, ARM_H)).ToBrep())
+
+# ---------- skin: same opening and rotation as before, touching the top of the arms ----------
+skinarcs = []
+for k in range(count):
+    scen, sR, sX, sY, sZ, sp = circ(skins[k])
+    sweep = math.atan2(dot(sub(sp[2], scen), sY), dot(sub(sp[2], scen), sX)) % TAU
+    if sweep < 1e-9: sweep = TAU
+    r = F[k]['R'] + H / 2.0 + arm_h
+    arc = rg.Arc(rg.Plane(P3(scen), rg.Vector3d(*sX), rg.Vector3d(*sY)), r, sweep)
+    skinarcs.append(rg.ArcCurve(arc))
