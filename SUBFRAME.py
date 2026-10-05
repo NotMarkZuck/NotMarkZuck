@@ -134,14 +134,37 @@ except NameError: shaves = []
 def kept(p):
     q = rg.Point3d(*p)
     return any(b_.IsPointInside(q, tol, False) for b_ in shaves)
+def on_ring(Fk, u):
+    th = Fk['r0'] + u
+    d = add(mul(Fk['X'], math.cos(th)), mul(Fk['Y'], math.sin(th)))
+    return all(kept(add(Fk['cen'], mul(d, Fk['R'] + sg * H / 2.0))) for sg in (-1, 1))
+
+def ring_ends(Fk):
+    step = math.radians(0.5)
+    def scan(u, du):
+        while -1e-12 <= u <= Fk['rs'] + 1e-12:
+            if on_ring(Fk, u): return u
+            u += du
+        return None
+    def refine(u_out, u_in):
+        for _ in range(12):
+            m = 0.5 * (u_out + u_in)
+            if on_ring(Fk, m): u_in = m
+            else: u_out = m
+        return u_in
+    a_ = scan(0.0, step)
+    if a_ is None: return None
+    b_ = scan(Fk['rs'], -step)
+    if a_ > 0: a_ = refine(max(a_ - step, 0.0), a_)
+    if b_ < Fk['rs']: b_ = refine(min(b_ + step, Fk['rs']), b_)
+    return a_, b_
+
 for k in range(count):
     if not shaves: continue
-    nb = len(pts[k])
-    first = next((i for i in range(nb) if kept(pts[k][i])), None)
-    if first is None: continue
-    last = next(i for i in reversed(range(nb)) if kept(pts[k][i]))
-    F[k]['lo'], F[k]['hi'] = min(BU[k][first], BU[k][last]), max(BU[k][first], BU[k][last])
-    F[k]['ins'] = 0.0
+    ends = ring_ends(F[k])
+    if ends is None: continue
+    F[k]['lo'], F[k]['hi'] = ends
+    F[k]['ins'] = (W / 2.0) / F[k]['R']
 U, kb = rail_positions(F, BU, N, W)
 
 try: holes = [rs.coercebrep(b_) for b_ in (hole if hasattr(hole, '__iter__') else [hole]) if b_ is not None]
@@ -199,14 +222,25 @@ if hole_boxes:
             a_, b_ = F[k]['hole']
             c_ = (W / 2.0) / F[k]['R']
             gap = 2.0 * W / F[k]['R']
+            ins_ = F[k].get('ins', c_)
+            lo_, hi_ = F[k]['lo'] + ins_, F[k]['hi'] - ins_
             lim = a_ - c_
             for j in range(split - 1, -1, -1):
                 if U[k][j] <= lim: break
                 U[k][j] = lim; lim -= gap
+            if split > 0 and U[k][0] < lo_:
+                top_ = max(min(a_ - c_, hi_), lo_)
+                for j in range(split):
+                    U[k][j] = lo_ + (top_ - lo_) * j / max(split - 1, 1) if split > 1 else top_
             lim = b_ + c_
             for j in range(split, nr):
                 if U[k][j] >= lim: break
                 U[k][j] = lim; lim += gap
+            if split < nr and U[k][nr - 1] > hi_:
+                bot_ = min(max(b_ + c_, lo_), hi_)
+                m_ = nr - split
+                for i_, j in enumerate(range(split, nr)):
+                    U[k][j] = bot_ + (hi_ - bot_) * i_ / max(m_ - 1, 1) if m_ > 1 else bot_
 
 def P3(t): return rg.Point3d(*t)
 
