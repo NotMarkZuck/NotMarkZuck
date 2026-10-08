@@ -116,4 +116,25 @@ Test for every page: *Does this show how I perceive or structure the world, or j
 - Spell-check twice; get a native-English reader to proofread.
 - Export the screen PDF under 32 MB; check how it reads on a laptop at 100% zoom.
 
+---
+
+## Part 6 — Visual system (from the mood images, Oct 2026)
+
+**Core idea: "Signal / Points."** Everything is built from points: data points, Gaussian-splat points, the perforations of the Mountain Library façade (p.25, already a dot-matrix tree), and halftone people. Listening to a place turns it into points; designing turns the points back into form. This ties the econ/data, startup and scan work to the architecture, so the style has a reason to exist.
+
+| Mood image | Use it for | Adjust |
+|---|---|---|
+| 1 Radial discography | Table of contents: every project ever (small, light grey) + portfolio projects (large, white), arranged by year/scale; an inner ring encodes data (hours, scale, team vs solo) | Portfolio project names and page numbers stay near-horizontal and readable at 100% zoom |
+| 2 Collage thesis spread | One "listening" spread per project: site photo + new hand drawings over it + timeline / data | Restyle to the portfolio palette; fewer elements than the reference (the overfilled-page warning) |
+| 3 Fibre poster | Cover: huge vertical name type + a field of points made from *your own* data or splat | Don't use a generic stock/AI swoosh; the image must be yours |
+| 4 Dot-matrix film poster | Drawing/diagram language: people, trees, data as dots; mostly greyscale + one accent | — |
+| 5 Neon pixel poster | Startup / tech section and section dividers only | Too loud for project pages; GSD reads quieter |
+
+**Rules:**
+- Pages: white for projects (splats on white), black for the cover, contents and dividers only.
+- Colour: greyscale + **one** accent (candidate: the existing tiger red, or an acid green for the tech section only).
+- Type: one mono or grotesk family for labels/data, one for titles. No more.
+- Gaussian splats of physical models: label them "scan of physical model"; clean up stray points; link a 3D viewer/video (MIT's media field).
+- Every graphic flourish must carry information; reviewers penalise "too much graphic design than the design itself."
+
 **Next step:** the user supplies precedent portfolios. Analyse each one for structure, graphic system and how it shows identity, then apply them to this plan without copying their look.
