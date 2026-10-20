@@ -14,6 +14,8 @@ try: STEP = float(one(step))
 except: STEP = 0.5
 try: REACH = float(one(reach))
 except: REACH = 20.0
+try: T = float(one(thick))
+except: T = 0.5
 
 # stations along the profile: evenly spaced, plus every corner (ramp/landing change)
 dom = prof.Domain
@@ -47,7 +49,8 @@ def hits(p, c):
     right = [s for s in out if s > tol]
     return (max(left) if left else None), (min(right) if right else None)
 
-# at every station: walk sideways from the profile line until the first wood member on each side
+# at every station: walk sideways along the BOTTOM of the deck (profile minus thickness)
+# until the first wood member on each side
 st = []
 for t in ts:
     p = prof.PointAt(t)
@@ -56,7 +59,7 @@ for t in ts:
     if not h.Unitize(): continue
     c = rg.Vector3d.CrossProduct(Z, h)
     c.Unitize()
-    sl, sr = hits(p, c)
+    sl, sr = hits(p - Z * T, c)
     st.append([p, c, sl, sr])
 
 # only keep the stretch of profile that actually sits inside the bridge
@@ -114,9 +117,7 @@ if faces:
 left = rg.PolylineCurve(left_pts) if len(left_pts) > 1 else None
 right = rg.PolylineCurve(right_pts) if len(right_pts) > 1 else None
 
-# ---------- thickness: 6" (or the 'thick' input, in feet), extruded straight down ----------
-try: T = float(one(thick))
-except: T = 0.5
+# ---------- thickness: bottom is sized to the wood, solid goes straight up to the profile line ----------
 down = rg.Vector3d(0, 0, -T)
 lb = [p + down for p in left_pts]
 rb = [p + down for p in right_pts]
