@@ -97,3 +97,27 @@ if faces:
         surface.MergeCoplanarFaces(tol)
 left = rg.PolylineCurve(left_pts) if len(left_pts) > 1 else None
 right = rg.PolylineCurve(right_pts) if len(right_pts) > 1 else None
+
+# ---------- thickness: 6" (or the 'thick' input, in feet), extruded straight down ----------
+try: T = float(one(thick))
+except: T = 0.5
+down = rg.Vector3d(0, 0, -T)
+lb = [p + down for p in left_pts]
+rb = [p + down for p in right_pts]
+sides = []
+for i in range(len(st) - 1):
+    for q in ((left_pts[i], right_pts[i], right_pts[i + 1], left_pts[i + 1]),
+              (lb[i], lb[i + 1], rb[i + 1], rb[i]),
+              (left_pts[i], left_pts[i + 1], lb[i + 1], lb[i]),
+              (right_pts[i], rb[i], rb[i + 1], right_pts[i + 1])):
+        f = rg.Brep.CreateFromCornerPoints(q[0], q[1], q[2], q[3], tol)
+        if f: sides.append(f)
+if len(st) > 1:
+    for q in ((left_pts[0], lb[0], rb[0], right_pts[0]), (left_pts[-1], right_pts[-1], rb[-1], lb[-1])):
+        f = rg.Brep.CreateFromCornerPoints(q[0], q[1], q[2], q[3], tol)
+        if f: sides.append(f)
+joined = rg.Brep.JoinBreps(sides, tol) if sides else None
+if joined:
+    surface = joined[0]
+    surface.MergeCoplanarFaces(tol)
+    if surface.SolidOrientation == rg.BrepSolidOrientation.Inward: surface.Flip()
