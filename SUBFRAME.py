@@ -1,0 +1,286 @@
+import math
+import Rhino
+import Rhino.Geometry as rg
+import rhinoscriptsyntax as rs
+from System.Collections.Generic import List
+
+ARM_H = 6.0 / 12.0
+ARM_W = 1.5 / 12.0
+ARM_D = 3.5 / 12.0
+
+tol = Rhino.RhinoDoc.ActiveDoc.ModelAbsoluteTolerance
+def one(v): return v if not hasattr(v, '__iter__') else list(v)[0]
+
+# ---------- geometry ----------
+TAU = 2 * math.pi
+def V(p): return (p.X, p.Y, p.Z)
+def add(*vs): return tuple(sum(c) for c in zip(*vs))
+def mul(a, s): return tuple(c * s for c in a)
+def sub(a, b): return tuple(p - q for p, q in zip(a, b))
+def dot(a, b): return sum(p * q for p, q in zip(a, b))
+def cross(a, b): return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+def unit(a):
+    l = dot(a, a) ** 0.5
+    return mul(a, 1.0 / l) if l > 1e-12 else None
+
+def circ(c):
+    p1, p2, p3 = V(c.PointAtStart), V(c.PointAt(c.Domain.Mid)), V(c.PointAtEnd)
+    a_, b_ = sub(p2, p1), sub(p3, p1)
+    n_ = cross(a_, b_)
+    cen = add(p1, mul(add(mul(cross(n_, a_), dot(b_, b_)), mul(cross(b_, n_), dot(a_, a_))), 0.5 / dot(n_, n_)))
+    X = unit(sub(p1, cen)); Z = unit(n_)
+    return cen, dot(sub(p1, cen), sub(p1, cen)) ** 0.5, X, cross(Z, X), Z, (p1, p2, p3)
+
+def span(pts, cen, X, Y):
+    s, m, e = [math.atan2(dot(sub(p, cen), Y), dot(sub(p, cen), X)) % TAU for p in pts]
+    if (m - s) % TAU <= (e - s) % TAU: return s, (e - s) % TAU
+    return e, (s - e) % TAU
+
+def ring_info(ringcrv, skincrv):
+    cen, R, X, Y, Z, rp = circ(ringcrv)
+    r0, rs = span(rp, cen, X, Y)
+    scen, sR, _, _, _, sp = circ(skincrv)
+    s0, ss = span(sp, cen, X, Y)
+    lo, hi = 0.0, rs
+    best = None
+    for k in (-1, 0, 1):
+        a0 = max(0.0, (s0 - r0) % TAU + k * TAU)
+        a1 = min(rs, (s0 - r0) % TAU + k * TAU + ss)
+        if a1 - a0 > 1e-9 and (best is None or a1 - a0 > best[1] - best[0]): best = (a0, a1)
+    if best: lo, hi = best
+    return dict(cen=cen, R=R, X=X, Y=Y, Z=Z, r0=r0, rs=rs, lo=lo, hi=hi, scen=scen, sR=sR)
+
+def u_of(p, F):
+    u = (math.atan2(dot(sub(p, F['cen']), F['Y']), dot(sub(p, F['cen']), F['X'])) - F['r0']) % TAU
+    if u > F['rs'] + (TAU - F['rs']) / 2: u -= TAU
+    return u
+
+def rail_positions(F_list, boards_u, N, w):
+    kb, best = None, 1.5
+    for U in boards_u:
+        gaps = [U[i + 1] - U[i] for i in range(len(U) - 1)]
+        if not gaps: continue
+        med = sorted(gaps)[len(gaps) // 2]
+        for i, g in enumerate(gaps):
+            if med > 1e-12 and g / med > best: kb, best = i, g / med
+    rows = []
+    for F, U in zip(F_list, boards_u):
+        ins = F.get('ins', (w / 2.0) / F['R'])
+        lo, hi = F['lo'] + ins, F['hi'] - ins
+        if kb is None:
+            rows.append(('even', lo, hi)); continue
+        e1 = min(max(U[kb], lo), hi)
+        e2 = min(max(U[kb + 1], e1), hi)
+        rows.append(('eye', lo, e1, e2, hi))
+    if kb is None:
+        return [[lo + (hi - lo) * j / max(N - 1, 1) for j in range(N)] for _, lo, hi in rows], None
+    rest = max(N - 2, 0)
+    s1 = sum(r[2] - r[1] for r in rows); s2 = sum(r[4] - r[3] for r in rows)
+    n1 = int(round(rest * s1 / (s1 + s2))) if s1 + s2 > 0 else rest // 2
+    n2 = rest - n1
+    out = []
+    for _, lo, e1, e2, hi in rows:
+        below = [lo + (e1 - lo) * j / n1 for j in range(n1)] if n1 else []
+        above = [e2 + (hi - e2) * j / n2 for j in range(1, n2 + 1)] if n2 else []
+        out.append(below + [e1, e2] + above)
+    return out, kb
+
+def frame_at(F, u):
+    th = F['r0'] + u
+    d = add(mul(F['X'], math.cos(th)), mul(F['Y'], math.sin(th)))
+    return add(F['cen'], mul(d, F['R'])), d, cross(F['Z'], d), F['Z']
+
+def hit(q, dvec, o, n_):
+    s = dot(sub(o, q), n_) / dot(dvec, n_)
+    return add(q, mul(dvec, s))
+
+def plank_corners(fa, fb, W, T):
+    (oa, _, ta, za), (ob, _, tb, zb) = fa, fb
+    xp = unit(sub(ob, oa))
+    if xp is None: return None
+    if dot(ta, tb) < 0: tb = mul(tb, -1)
+    s = add(ta, tb)
+    yp = unit(sub(s, mul(xp, dot(s, xp)))); n_ = cross(xp, yp)
+    A, B = {}, {}
+    for sy in (-1, 1):
+        for sz in (-1, 1):
+            q = add(oa, mul(yp, sy * W / 2.0), mul(n_, sz * T / 2.0))
+            A[sy, sz] = hit(q, xp, oa, za); B[sy, sz] = hit(q, xp, ob, zb)
+    return [(A[-1,1], B[-1,1], B[1,1], A[1,1]), (A[-1,-1], A[1,-1], B[1,-1], B[-1,-1]),
+            (A[-1,-1], B[-1,-1], B[-1,1], A[-1,1]), (A[1,-1], A[1,1], B[1,1], B[1,-1]),
+            (A[-1,-1], A[-1,1], A[1,1], A[1,-1]), (B[-1,-1], B[1,-1], B[1,1], B[-1,1])]
+
+def arm_frame(F, u, H):
+    p, d, tg, Z = frame_at(F, u)
+    return add(p, mul(d, H / 2.0)), d, cross(Z, d), Z
+
+# ---------- inputs ----------
+if not hasattr(boards, 'Branches'):
+    raise Exception("right-click 'boards' and set it to Tree Access")
+rings = [rs.coercecurve(c) for c in ring]
+skins = [rs.coercecurve(c) for c in skin]
+pts = [[V(rs.coerce3dpoint(p)) for p in br] for br in boards.Branches]
+N, W, H = int(round(float(one(n)))), float(one(w)), float(one(h))
+try: arm_brep = rs.coercebrep(one(arm)) if arm else None
+except NameError: arm_brep = None
+arm_h = arm_brep.GetBoundingBox(True).Max.Z if arm_brep else ARM_H
+count = min(len(rings), len(skins), len(pts))
+
+F = [ring_info(rings[k], skins[k]) for k in range(count)]
+BU = [[u_of(p, F[k]) for p in pts[k]] for k in range(count)]
+
+try: shaves = [rs.coercebrep(b_) for b_ in (shave if hasattr(shave, '__iter__') else [shave]) if b_ is not None]
+except NameError: shaves = []
+def kept(p):
+    q = rg.Point3d(*p)
+    return any(b_.IsPointInside(q, tol, False) for b_ in shaves)
+def on_ring(Fk, u):
+    th = Fk['r0'] + u
+    d = add(mul(Fk['X'], math.cos(th)), mul(Fk['Y'], math.sin(th)))
+    return all(kept(add(Fk['cen'], mul(d, Fk['R'] + sg * H / 2.0))) for sg in (-1, 1))
+
+def ring_ends(Fk):
+    step = math.radians(0.5)
+    def scan(u, du):
+        while -1e-12 <= u <= Fk['rs'] + 1e-12:
+            if on_ring(Fk, u): return u
+            u += du
+        return None
+    def refine(u_out, u_in):
+        for _ in range(12):
+            m = 0.5 * (u_out + u_in)
+            if on_ring(Fk, m): u_in = m
+            else: u_out = m
+        return u_in
+    a_ = scan(0.0, step)
+    if a_ is None: return None
+    b_ = scan(Fk['rs'], -step)
+    if a_ > 0: a_ = refine(max(a_ - step, 0.0), a_)
+    if b_ < Fk['rs']: b_ = refine(min(b_ + step, Fk['rs']), b_)
+    return a_, b_
+
+for k in range(count):
+    if not shaves: continue
+    ends = ring_ends(F[k])
+    if ends is None: continue
+    F[k]['lo'], F[k]['hi'] = ends
+    F[k]['ins'] = (W / 2.0) / F[k]['R']
+U, kb = rail_positions(F, BU, N, W)
+
+try: holes = [rs.coercebrep(b_) for b_ in (hole if hasattr(hole, '__iter__') else [hole]) if b_ is not None]
+except NameError: holes = []
+hole_boxes = [(b_, b_.GetBoundingBox(True)) for b_ in holes]
+def in_hole(p):
+    q = rg.Point3d(*p)
+    return any(bb.Contains(q) and b_.IsPointInside(q, tol, False) for b_, bb in hole_boxes)
+
+def hole_span(Fk, rb):
+    def at(u):
+        th = Fk['r0'] + u
+        return add(Fk['cen'], mul(add(mul(Fk['X'], math.cos(th)), mul(Fk['Y'], math.sin(th))), rb))
+    steps = max(int(Fk['rs'] / math.radians(0.5)), 2)
+    us = [Fk['rs'] * i / steps for i in range(steps + 1)]
+    ins = [in_hole(at(u)) for u in us]
+    runs, i = [], 0
+    while i < len(us):
+        if ins[i]:
+            j = i
+            while j + 1 < len(us) and ins[j + 1]: j += 1
+            runs.append((i, j)); i = j + 1
+        else: i += 1
+    if not runs: return None
+    i, j = max(runs, key=lambda r: r[1] - r[0])
+    def edge(u_out, u_in):
+        for _ in range(12):
+            m = 0.5 * (u_out + u_in)
+            if in_hole(at(m)): u_in = m
+            else: u_out = m
+        return u_in
+    a_ = edge(us[i - 1], us[i]) if i > 0 else us[i]
+    b_ = edge(us[j + 1], us[j]) if j + 1 < len(us) else us[j]
+    return a_, b_
+
+if hole_boxes:
+    for k in range(count):
+        rb = sum(dot(sub(p, F[k]['cen']), sub(p, F[k]['cen'])) ** 0.5 for p in pts[k]) / len(pts[k])
+        F[k]['hole'] = hole_span(F[k], rb)
+    hole_rings = [k for k in range(count) if F[k].get('hole')]
+    if hole_rings:
+        nr = len(U[0])
+        hit_ = {}
+        for k in hole_rings:
+            a_, b_ = F[k]['hole']
+            c_ = (W / 2.0) / F[k]['R']
+            for j in range(nr):
+                if a_ - c_ < U[k][j] < b_ + c_:
+                    hit_[j] = hit_.get(j, 0.0) + U[k][j] - 0.5 * (a_ + b_)
+        if hit_:
+            split = min(hit_) + sum(1 for v_ in hit_.values() if v_ < 0)
+        else:
+            split = sum(1 for j in range(nr) if sum(U[k][j] - 0.5 * sum(F[k]['hole']) for k in hole_rings) < 0)
+        for k in hole_rings:
+            a_, b_ = F[k]['hole']
+            c_ = (W / 2.0) / F[k]['R']
+            gap = 2.0 * W / F[k]['R']
+            ins_ = F[k].get('ins', c_)
+            lo_, hi_ = F[k]['lo'] + ins_, F[k]['hi'] - ins_
+            lim = a_ - c_
+            for j in range(split - 1, -1, -1):
+                if U[k][j] <= lim: break
+                U[k][j] = lim; lim -= gap
+            if split > 0 and U[k][0] < lo_:
+                top_ = max(min(a_ - c_, hi_), lo_)
+                for j in range(split):
+                    U[k][j] = lo_ + (top_ - lo_) * j / max(split - 1, 1) if split > 1 else top_
+            lim = b_ + c_
+            for j in range(split, nr):
+                if U[k][j] >= lim: break
+                U[k][j] = lim; lim += gap
+            if split < nr and U[k][nr - 1] > hi_:
+                bot_ = min(max(b_ + c_, lo_), hi_)
+                m_ = nr - split
+                for i_, j in enumerate(range(split, nr)):
+                    U[k][j] = bot_ + (hi_ - bot_) * i_ / max(m_ - 1, 1) if m_ > 1 else bot_
+
+def P3(t): return rg.Point3d(*t)
+
+# ---------- rails: flat mitred segments, continuous end to end ----------
+rails = []
+for j in range(len(U[0])):
+    fr = [frame_at(F[k], U[k][j]) for k in range(count)]
+    for k in range(count - 1):
+        quads = plank_corners(fr[k], fr[k + 1], W, H)
+        if not quads: continue
+        faces = List[rg.Brep]()
+        for q in quads:
+            f = rg.Brep.CreateFromCornerPoints(P3(q[0]), P3(q[1]), P3(q[2]), P3(q[3]), tol)
+            if f: faces.Add(f)
+        joined = rg.Brep.JoinBreps(faces, tol)
+        if joined:
+            b = joined[0]
+            if b.SolidOrientation == rg.BrepSolidOrientation.Inward: b.Flip()
+            rails.append(b)
+
+# ---------- arms: your Rhino arm, unchanged, standing on every rail at every rib ----------
+arms = []
+for k in range(count):
+    for u in U[k]:
+        base, d, tg, Z = arm_frame(F[k], u, H)
+        up = rg.Plane(P3(base), rg.Vector3d(*tg), rg.Vector3d(*Z))
+        if arm_brep:
+            g = arm_brep.DuplicateBrep()
+            g.Transform(rg.Transform.PlaneToPlane(rg.Plane.WorldXY, up))
+            arms.append(g)
+        else:
+            arms.append(rg.Box(up, rg.Interval(-ARM_W / 2, ARM_W / 2),
+                               rg.Interval(-ARM_D / 2, ARM_D / 2), rg.Interval(0, ARM_H)).ToBrep())
+
+# ---------- skin: same opening and rotation as before, touching the top of the arms ----------
+skinarcs = []
+for k in range(count):
+    scen, sR, sX, sY, sZ, sp = circ(skins[k])
+    sweep = math.atan2(dot(sub(sp[2], scen), sY), dot(sub(sp[2], scen), sX)) % TAU
+    if sweep < 1e-9: sweep = TAU
+    r = F[k]['R'] + H / 2.0 + arm_h
+    arc = rg.Arc(rg.Plane(P3(scen), rg.Vector3d(*sX), rg.Vector3d(*sY)), r, sweep)
+    skinarcs.append(rg.ArcCurve(arc))
