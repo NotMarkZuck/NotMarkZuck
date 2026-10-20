@@ -82,6 +82,12 @@ for side in (2, 3):
         else:
             s[side] = st[lo[-1] if lo else hi[0]][side]
 
+# round each side in to the nearest whole inch (never further, so it never cuts into the wood)
+import math
+for s in st:
+    s[2] = -math.floor(-s[2] * 12 + 1e-6) / 12.0
+    s[3] = math.floor(s[3] * 12 + 1e-6) / 12.0
+
 # build the walking surface: flat across, following the profile along
 left_pts = [p + c * sl for p, c, sl, sr in st]
 right_pts = [p + c * sr for p, c, sl, sr in st]
