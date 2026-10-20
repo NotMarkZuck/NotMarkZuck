@@ -63,6 +63,22 @@ for t in ts:
 idx = [i for i, s in enumerate(st) if s[2] is not None or s[3] is not None]
 st = st[idx[0]: idx[-1] + 1] if idx else []
 
+# where the line passes a wood member/plate, hold the edge at one distance (parallel to the member),
+# using the tightest spot so it never cuts the wood, rounded in to a whole inch
+import math
+for side in (2, 3):
+    i = 0
+    while i < len(st):
+        if st[i][side] is None:
+            i += 1; continue
+        j = i
+        while j + 1 < len(st) and st[j + 1][side] is not None: j += 1
+        vals = [st[k][side] for k in range(i, j + 1)]
+        if side == 2: v = -math.floor(-max(vals) * 12 + 1e-6) / 12.0
+        else: v = math.floor(min(vals) * 12 + 1e-6) / 12.0
+        for k in range(i, j + 1): st[k][side] = v
+        i = j + 1
+
 # where there is no wood member, run straight between the last and next touching points
 pos = [0.0]
 for i in range(1, len(st)):
@@ -81,12 +97,6 @@ for side in (2, 3):
             s[side] = st[a][side] + (st[b][side] - st[a][side]) * f
         else:
             s[side] = st[lo[-1] if lo else hi[0]][side]
-
-# round each side in to the nearest whole inch (never further, so it never cuts into the wood)
-import math
-for s in st:
-    s[2] = -math.floor(-s[2] * 12 + 1e-6) / 12.0
-    s[3] = math.floor(s[3] * 12 + 1e-6) / 12.0
 
 # build the walking surface: flat across, following the profile along
 left_pts = [p + c * sl for p, c, sl, sr in st]
