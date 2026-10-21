@@ -9,6 +9,8 @@ skins = [rs.coercebrep(s) for s in many(skin) if s is not None]
 cuts = [rs.coercebrep(c) for c in many(cutters) if c is not None]
 skins = [s for s in skins if s]
 cuts = [c for c in cuts if c]
+for c in cuts:
+    if c.IsSolid and c.SolidOrientation == rg.BrepSolidOrientation.Inward: c.Flip()
 
 def inside(pt):
     for c in cuts:
@@ -37,3 +39,5 @@ for s in skins:
         (removed if inside(pt) else kept).append(p)
 
 skin_cut = kept
+print("skin pieces in: %d | cutters: %d (closed: %s)" % (len(skins), len(cuts), [c.IsSolid for c in cuts]))
+print("kept: %d | removed: %d" % (len(kept), len(removed)))
