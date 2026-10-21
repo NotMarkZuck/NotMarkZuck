@@ -16,7 +16,10 @@ def nums(v):
     except NameError: return []
 
 crvs = [rs.coercecurve(c) for c in many(crv) if c is not None]
-U1, G1 = nums(u), nums(gap)
+try: U1, G1 = nums(u), nums(gap)
+except NameError: U1, G1 = [], []
+try: LOC, OPN = nums(wloc), nums(wopen)   # gene pools: window location (0-1 along the arc) and opening (inches)
+except NameError: LOC, OPN = [], []
 try: U2, G2 = nums(u2), nums(gap2)
 except NameError: U2, G2 = [], []
 W = num(w, 0.5)            # board width (ft)  6"
@@ -33,6 +36,22 @@ def inside(pt):
 def at(lst, k, d=0.0):
     return lst[min(k, len(lst) - 1)] if lst else d
 
+def spread(vals, n):
+    # gene values spaced evenly from the first ring to the last, smooth curve in between
+    m = len(vals)
+    if m == 0: return []
+    if m == 1: return [vals[0]] * n
+    out_ = []
+    for k in range(n):
+        x_ = k * (m - 1) / float(max(n - 1, 1))
+        i = min(int(x_), m - 2); f = x_ - i
+        p0, p1, p2, p3 = vals[max(i - 1, 0)], vals[i], vals[i + 1], vals[min(i + 2, m - 1)]
+        out_.append(0.5 * (2 * p1 + (p2 - p0) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f
+                           + (3 * p1 - p0 - 3 * p2 + p3) * f ** 3))
+    return out_
+LOCk = spread(LOC, len(crvs))
+OPNk = spread(OPN, len(crvs)) if OPN else [0.0] * len(LOCk)
+
 # ---------- layout: every board 6" wide, every gap 3", measured along each ring ----------
 # rows are counted outwards from the two edges of the window: row -1 is always the board just
 # below the window, row 0 the board just above it, and so on. so the boards framing the window
@@ -42,8 +61,14 @@ def at(lst, k, d=0.0):
 rows = []
 for k, c in enumerate(crvs):
     L = c.GetLength()
-    uu, yy = at(U1, k, 0.5), max(at(G1, k), 0.0)
-    e1, e2 = uu * (1 - yy) * L, (uu + (1 - uu) * yy) * L
+    if LOCk:
+        # window from the gene pools: centre at LOC along the arc, OPN inches clear between the framing boards
+        sc_ = min(max(LOCk[k], 0.0), 1.0) * L
+        half = max(OPNk[k] / 12.0 - GAP, 0.0) / 2.0
+        e1, e2 = max(sc_ - half, 0.0), min(sc_ + half, L)
+    else:
+        uu, yy = at(U1, k, 0.5), max(at(G1, k), 0.0)
+        e1, e2 = uu * (1 - yy) * L, (uu + (1 - uu) * yy) * L
     others = []
     if U2:
         u2_, y2_ = at(U2, k), max(at(G2, k), 0.0)
