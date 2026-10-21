@@ -34,26 +34,37 @@ def at(lst, k, d=0.0):
     return lst[min(k, len(lst) - 1)] if lst else d
 
 # ---------- layout: every board 6" wide, every gap 3", measured along each ring ----------
-# boards sit on a fixed grid that starts at the middle of the window, so the same board
-# row lands at the same distance from the window on every ring (rows line up ring to ring).
-# the window removes whole boards; boards that don't fit at the ends of a ring are dropped.
+# rows are counted outwards from the two edges of the window: row -1 is always the board just
+# below the window, row 0 the board just above it, and so on. so the boards framing the window
+# run as continuous lines from ring to ring, and any difference in board count between rings
+# shows up only at the far ends of the arcs. where there is no window the two edge rows simply
+# meet with a normal 3" gap.
 rows = []
 for k, c in enumerate(crvs):
     L = c.GetLength()
-    wins = []
-    for UU, GG in ((U1, G1), (U2, G2)):
-        if not UU: continue
-        uu, yy = at(UU, k), at(GG, k)
-        if yy > 1e-9: wins.append((uu * (1 - yy) * L, (uu + (1 - uu) * yy) * L))
-    uu, yy = at(U1, k, 0.5), at(G1, k)
-    s0 = (uu * (1 - yy) + uu + (1 - uu) * yy) * 0.5 * L
+    uu, yy = at(U1, k, 0.5), max(at(G1, k), 0.0)
+    e1, e2 = uu * (1 - yy) * L, (uu + (1 - uu) * yy) * L
+    others = []
+    if U2:
+        u2_, y2_ = at(U2, k), max(at(G2, k), 0.0)
+        if y2_ > 1e-9: others.append((u2_ * (1 - y2_) * L, (u2_ + (1 - u2_) * y2_) * L))
     d = {}
-    for j in range(-int(s0 / P) - 2, int((L - s0) / P) + 2):
-        sc = s0 + P / 2.0 + j * P
-        lo, hi = sc - W / 2.0, sc + W / 2.0
-        if lo < -tol or hi > L + tol: continue
-        if any(lo < b_ and hi > a_ for a_, b_ in wins): continue
+    # above the window: rows 0, 1, 2 ...
+    sc, j = e2 + GAP / 2.0 + W / 2.0, 0
+    while sc + W / 2.0 <= L + tol:
+        for a_, b_ in others:   # hop over a second window if there is one
+            if sc - W / 2.0 < b_ and sc + W / 2.0 > a_: sc = b_ + GAP / 2.0 + W / 2.0
+        if sc + W / 2.0 > L + tol: break
         d[j] = sc
+        sc += P; j += 1
+    # below the window: rows -1, -2, -3 ...
+    sc, j = e1 - GAP / 2.0 - W / 2.0, -1
+    while sc - W / 2.0 >= -tol:
+        for a_, b_ in others:
+            if sc - W / 2.0 < b_ and sc + W / 2.0 > a_: sc = a_ - GAP / 2.0 - W / 2.0
+        if sc - W / 2.0 < -tol: break
+        d[j] = sc
+        sc -= P; j -= 1
     rows.append(d)
 
 def frame(c, s):
