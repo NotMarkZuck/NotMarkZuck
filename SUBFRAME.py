@@ -56,21 +56,36 @@ def u_of(p, F):
     return u
 
 def rail_positions(F_list, boards_u, N, w):
-    kb, best = None, 1.5
+    # the window = the biggest gap between boards on each ring (rings can have different board counts)
+    boards_u = [sorted(U) for U in boards_u]
+    found = []
     for U in boards_u:
-        gaps = [U[i + 1] - U[i] for i in range(len(U) - 1)]
-        if not gaps: continue
-        med = sorted(gaps)[len(gaps) // 2]
-        for i, g in enumerate(gaps):
-            if med > 1e-12 and g / med > best: kb, best = i, g / med
+        gaps = [(U[i + 1] - U[i], i) for i in range(len(U) - 1)]
+        if not gaps: found.append(None); continue
+        med = sorted(g for g, _ in gaps)[len(gaps) // 2]
+        g, i = max(gaps)
+        found.append((U[i], U[i + 1]) if med > 1e-12 and g / med > 1.5 else None)
+    kb = None if not any(found) else 0
+    if kb is not None:
+        # rings without a window: use the board gap closest to where the window runs on the nearest ring that has one
+        fk = [k for k, f in enumerate(found) if f]
+        for k, U in enumerate(boards_u):
+            if found[k] or len(U) < 2: continue
+            n_ = min(fk, key=lambda m: abs(m - k))
+            Fn = F_list[n_]
+            fr = (0.5 * sum(found[n_]) - Fn['lo']) / max(Fn['hi'] - Fn['lo'], 1e-9)
+            tgt = F_list[k]['lo'] + fr * (F_list[k]['hi'] - F_list[k]['lo'])
+            i = min(range(len(U) - 1), key=lambda i_: abs(0.5 * (U[i_] + U[i_ + 1]) - tgt))
+            found[k] = (U[i], U[i + 1])
     rows = []
     for F, U in zip(F_list, boards_u):
         ins = F.get('ins', (w / 2.0) / F['R'])
         lo, hi = F['lo'] + ins, F['hi'] - ins
         if kb is None:
             rows.append(('even', lo, hi)); continue
-        e1 = min(max(U[kb], lo), hi)
-        e2 = min(max(U[kb + 1], e1), hi)
+        e1_, e2_ = found[len(rows)] or (0.5 * (lo + hi), 0.5 * (lo + hi))
+        e1 = min(max(e1_, lo), hi)
+        e2 = min(max(e2_, e1), hi)
         rows.append(('eye', lo, e1, e2, hi))
     if kb is None:
         return [[lo + (hi - lo) * j / max(N - 1, 1) for j in range(N)] for _, lo, hi in rows], None
