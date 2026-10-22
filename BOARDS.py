@@ -26,7 +26,8 @@ W = num(w, 0.5)            # board width (ft)  6"
 GAP = num(g, 0.25)         # gap between boards (ft)  3"
 T = num(t, 0.5 / 12.0)     # board thickness (ft)
 P = W + GAP                # one board + one gap
-EXTRA = int(round(num(extra, 3)))   # extra boards spilling past each end of every arc
+try: EXTRA = int(round(num(extra, 3)))   # extra boards spilling past each end of every arc
+except NameError: EXTRA = 3
 EXT = EXTRA * P + W                 # how far each arc is extended to carry them
 
 try: cutters = [rs.coercebrep(c_) for c_ in many(cut) if c_ is not None]
