@@ -143,7 +143,8 @@ for k in range(len(crvs) - 1):
                 B[sy, sz] = hit(q, xp, ob, V(zb))
         if cut_boxes and all(inside(c_) for c_ in list(A.values()) + list(B.values())): continue
         n_out = n if dot(n, add(V(ka), V(kb))) < 0 else mul(n, -1)   # face of the board towards the skin
-        bays[-1].append((mul(add(oa, ob), 0.5), xp, yp, n_out))
+        zb_ = V(zb) if dot(V(za), V(zb)) > 0 else mul(V(zb), -1)
+        bays[-1].append((mul(add(oa, ob), 0.5), xp, yp, n_out, add(V(za), zb_)))
         quads = [(A[-1,1], B[-1,1], B[1,1], A[1,1]), (A[-1,-1], A[1,-1], B[1,-1], B[-1,-1]),
                  (A[-1,-1], B[-1,-1], B[-1,1], A[-1,1]), (A[1,-1], A[1,1], B[1,1], B[1,-1]),
                  (A[-1,-1], A[-1,1], A[1,1], A[1,-1]), (B[-1,-1], B[1,-1], B[1,1], B[-1,1])]
@@ -165,12 +166,18 @@ except: SW = 2.0 / 12.0
 try: STH = float(many(sth)[0]) / 12.0    # strap thickness (inches)
 except: STH = 0.25 / 12.0
 
-def strap(run):
+def strap(run, O, N):
+    # every corner of the strap sits exactly where a board's outside edge crosses one of two
+    # flat planes (the strap's two sides), so the strap is a straight, flat band across the boards
     if len(run) < 2: return None
-    P_ = [rg.Point3d(*add(p, mul(x, -SW / 2.0))) for p, x, n in run]          # inner left
-    Q_ = [rg.Point3d(*add(p, mul(x, SW / 2.0))) for p, x, n in run]           # inner right
-    Po = [rg.Point3d(*add(p, mul(x, -SW / 2.0), mul(n, STH))) for p, x, n in run]
-    Qo = [rg.Point3d(*add(p, mul(x, SW / 2.0), mul(n, STH))) for p, x, n in run]
+    def on_plane(q, x, off):
+        o_ = add(O, mul(N, off))
+        dn = dot(x, N)
+        return add(q, mul(x, dot(sub(o_, q), N) / dn)) if abs(dn) > 1e-9 else q
+    P_ = [rg.Point3d(*on_plane(q, x, -SW / 2.0)) for q, x, n in run]          # inner, one side
+    Q_ = [rg.Point3d(*on_plane(q, x, SW / 2.0)) for q, x, n in run]           # inner, other side
+    Po = [rg.Point3d(*add(on_plane(q, x, -SW / 2.0), mul(n, STH))) for q, x, n in run]
+    Qo = [rg.Point3d(*add(on_plane(q, x, SW / 2.0), mul(n, STH))) for q, x, n in run]
     quads = [(P_[0], Po[0], Qo[0], Q_[0]), (P_[-1], Q_[-1], Qo[-1], Po[-1])]
     for m in range(len(run) - 1):
         quads += [(P_[m], Q_[m], Q_[m + 1], P_[m + 1]), (Po[m], Po[m + 1], Qo[m + 1], Qo[m]),
@@ -188,18 +195,23 @@ def strap(run):
 straps = []
 if SW > 0 and STH > 0:
     for bay in bays:
+        if not bay: continue
+        # one flat plane halfway between the two rings: the strap's centre line lies in it
+        O = mul(add(*[m_ for m_, _, _, _, _ in bay]), 1.0 / len(bay))
+        N = unit(add(*[z_ for _, _, _, _, z_ in bay]))
+        if N is None: continue
         run = []
-        for mid, xp, yp, n in bay:
+        for mid, xp, yp, n, z_ in bay:
             face = add(mid, mul(n, tk))
             e_lo, e_hi = add(face, mul(yp, -h)), add(face, mul(yp, h))
             if run:
                 dd = sub(e_lo, run[-1][0])
                 if dot(dd, dd) ** 0.5 > GAP * 1.5 + 1e-6:     # bigger than a normal gap = window or missing boards
-                    b = strap(run)
+                    b = strap(run, O, N)
                     if b: straps.append(b)
                     run = []
             run += [(e_lo, xp, n), (e_hi, xp, n)]
-        b = strap(run)
+        b = strap(run, O, N)
         if b: straps.append(b)
 
 # board centre points, one branch per ring (feeds the SUBFRAME script's 'boards' input)
