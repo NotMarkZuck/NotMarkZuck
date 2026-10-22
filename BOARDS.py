@@ -26,6 +26,8 @@ W = num(w, 0.5)            # board width (ft)  6"
 GAP = num(g, 0.25)         # gap between boards (ft)  3"
 T = num(t, 0.5 / 12.0)     # board thickness (ft)
 P = W + GAP                # one board + one gap
+EXTRA = int(round(num(extra, 3)))   # extra boards spilling past each end of every arc
+EXT = EXTRA * P + W                 # how far each arc is extended to carry them
 
 try: cutters = [rs.coercebrep(c_) for c_ in many(cut) if c_ is not None]
 except NameError: cutters = []
@@ -76,18 +78,18 @@ for k, c in enumerate(crvs):
     d = {}
     # above the window: rows 0, 1, 2 ...
     sc, j = e2 + GAP / 2.0 + W / 2.0, 0
-    while sc + W / 2.0 <= L + tol:
+    while sc + W / 2.0 <= L + EXTRA * P + tol:
         for a_, b_ in others:   # hop over a second window if there is one
             if sc - W / 2.0 < b_ and sc + W / 2.0 > a_: sc = b_ + GAP / 2.0 + W / 2.0
-        if sc + W / 2.0 > L + tol: break
+        if sc + W / 2.0 > L + EXTRA * P + tol: break
         d[j] = sc
         sc += P; j += 1
     # below the window: rows -1, -2, -3 ...
     sc, j = e1 - GAP / 2.0 - W / 2.0, -1
-    while sc - W / 2.0 >= -tol:
+    while sc - W / 2.0 >= -EXTRA * P - tol:
         for a_, b_ in others:
             if sc - W / 2.0 < b_ and sc + W / 2.0 > a_: sc = a_ - GAP / 2.0 - W / 2.0
-        if sc - W / 2.0 < -tol: break
+        if sc - W / 2.0 < -EXTRA * P - tol: break
         d[j] = sc
         sc -= P; j -= 1
     rows.append(d)
@@ -116,7 +118,13 @@ def hit(q, dd, o, n):
     s_ = dot(sub(o, q), n) / dot(dd, n)
     return rg.Point3d(*add(q, mul(dd, s_)))
 
-F = [{j: frame(crvs[k], s) for j, s in rows[k].items()} for k in range(len(crvs))]
+# the arcs carried on past both ends (same circle) so the extra boards have somewhere to sit
+crvx, shift = [], []
+for c in crvs:
+    cx = c.Extend(rg.CurveEnd.Both, EXT, rg.CurveExtensionStyle.Arc) if EXTRA > 0 else None
+    crvx.append(cx if cx else c); shift.append(EXT if cx else 0.0)
+F = [{j: frame(crvx[k], s + shift[k]) for j, s in rows[k].items()
+      if -tol <= s + shift[k] <= crvx[k].GetLength() + tol} for k in range(len(crvs))]
 
 # ---------- planks: flat, mitred to each ring, one per row per bay ----------
 a = []
