@@ -100,7 +100,8 @@ def frame(c, s):
     ok = c.TryGetPlane()
     z = ok[1].ZAxis if isinstance(ok, tuple) and ok[0] else rg.Vector3d.CrossProduct(x, c.CurvatureAt(tt))
     z.Unitize()
-    return p, x, z
+    kv = c.CurvatureAt(tt)          # points towards the centre of the ring
+    return p, x, z, kv
 
 def V(p): return (p.X, p.Y, p.Z)
 def add(*vs): return tuple(sum(c_) for c_ in zip(*vs))
@@ -119,10 +120,12 @@ F = [{j: frame(crvs[k], s) for j, s in rows[k].items()} for k in range(len(crvs)
 
 # ---------- planks: flat, mitred to each ring, one per row per bay ----------
 a = []
+bays = []                           # per bay: the planks in order along the arc (for the straps)
 h, tk = W / 2.0, T / 2.0
 for k in range(len(crvs) - 1):
+    bays.append([])
     for j in sorted(set(F[k]) & set(F[k + 1])):
-        (pa, xa, za), (pb, xb, zb) = F[k][j], F[k + 1][j]
+        (pa, xa, za, ka), (pb, xb, zb, kb) = F[k][j], F[k + 1][j]
         oa, ob = V(pa), V(pb)
         xp = unit(sub(ob, oa))
         if xp is None: continue
@@ -139,6 +142,8 @@ for k in range(len(crvs) - 1):
                 A[sy, sz] = hit(q, xp, oa, V(za))
                 B[sy, sz] = hit(q, xp, ob, V(zb))
         if cut_boxes and all(inside(c_) for c_ in list(A.values()) + list(B.values())): continue
+        n_out = n if dot(n, add(V(ka), V(kb))) < 0 else mul(n, -1)   # face of the board towards the skin
+        bays[-1].append((mul(add(oa, ob), 0.5), xp, yp, n_out))
         quads = [(A[-1,1], B[-1,1], B[1,1], A[1,1]), (A[-1,-1], A[1,-1], B[1,-1], B[-1,-1]),
                  (A[-1,-1], B[-1,-1], B[-1,1], A[-1,1]), (A[1,-1], A[1,1], B[1,1], B[1,-1]),
                  (A[-1,-1], A[-1,1], A[1,1], A[1,-1]), (B[-1,-1], B[1,-1], B[1,1], B[-1,1])]
@@ -152,7 +157,52 @@ for k in range(len(crvs) - 1):
             if b.SolidOrientation == rg.BrepSolidOrientation.Inward: b.Flip()
             a.append(b)
 
+# ---------- straps: one metal strap across the middle of each bay, on the outside face of the boards ----------
+# it runs flat on each board and straight across each 3" gap, so it is a faceted arc that sits tight
+# on the boards. it starts at the edge of the first board, ends at the edge of the last, and breaks at windows.
+try: SW = float(many(sw)[0]) / 12.0      # strap width (inches)
+except: SW = 2.0 / 12.0
+try: STH = float(many(sth)[0]) / 12.0    # strap thickness (inches)
+except: STH = 0.25 / 12.0
+
+def strap(run):
+    if len(run) < 2: return None
+    P_ = [rg.Point3d(*add(p, mul(x, -SW / 2.0))) for p, x, n in run]          # inner left
+    Q_ = [rg.Point3d(*add(p, mul(x, SW / 2.0))) for p, x, n in run]           # inner right
+    Po = [rg.Point3d(*add(p, mul(x, -SW / 2.0), mul(n, STH))) for p, x, n in run]
+    Qo = [rg.Point3d(*add(p, mul(x, SW / 2.0), mul(n, STH))) for p, x, n in run]
+    quads = [(P_[0], Po[0], Qo[0], Q_[0]), (P_[-1], Q_[-1], Qo[-1], Po[-1])]
+    for m in range(len(run) - 1):
+        quads += [(P_[m], Q_[m], Q_[m + 1], P_[m + 1]), (Po[m], Po[m + 1], Qo[m + 1], Qo[m]),
+                  (P_[m], P_[m + 1], Po[m + 1], Po[m]), (Q_[m], Qo[m], Qo[m + 1], Q_[m + 1])]
+    faces = List[rg.Brep]()
+    for qd in quads:
+        f = rg.Brep.CreateFromCornerPoints(qd[0], qd[1], qd[2], qd[3], tol)
+        if f: faces.Add(f)
+    joined = rg.Brep.JoinBreps(faces, tol)
+    if not joined: return None
+    b = joined[0]
+    if b.SolidOrientation == rg.BrepSolidOrientation.Inward: b.Flip()
+    return b
+
+straps = []
+if SW > 0 and STH > 0:
+    for bay in bays:
+        run = []
+        for mid, xp, yp, n in bay:
+            face = add(mid, mul(n, tk))
+            e_lo, e_hi = add(face, mul(yp, -h)), add(face, mul(yp, h))
+            if run:
+                dd = sub(e_lo, run[-1][0])
+                if dot(dd, dd) ** 0.5 > GAP * 1.5 + 1e-6:     # bigger than a normal gap = window or missing boards
+                    b = strap(run)
+                    if b: straps.append(b)
+                    run = []
+            run += [(e_lo, xp, n), (e_hi, xp, n)]
+        b = strap(run)
+        if b: straps.append(b)
+
 # board centre points, one branch per ring (feeds the SUBFRAME script's 'boards' input)
 pts = th.list_to_tree([[F[k][j][0] for j in sorted(F[k])] for k in range(len(crvs))])
-print("rings: %d | boards per ring: %d to %d | planks: %d" % (
-    len(crvs), min(len(r) for r in rows) if rows else 0, max(len(r) for r in rows) if rows else 0, len(a)))
+print("rings: %d | boards per ring: %d to %d | planks: %d | straps: %d" % (
+    len(crvs), min(len(r) for r in rows) if rows else 0, max(len(r) for r in rows) if rows else 0, len(a), len(straps)))
