@@ -62,20 +62,46 @@ for i, b in enumerate(boards_in):
 if flat_boards:      # start the skin on a fresh row
     cursor[0] = ORIGIN.X; cursor[1] -= cursor[2] + 3 * SPACE; cursor[2] = 0.0
 
-# ---------- skin: unrolled flat (it is lofted with straight sections, so it unrolls exactly) ----------
-flat_skin, skin_areas, failed = [], [], 0
+# ---------- skin: unrolled flat ----------
+# a skin lofted through all the rings bends two ways, so it can't unroll in one go. if that fails,
+# it is cut into one strip per bay (between two rings) - each strip is close to flat-bendable,
+# so it unrolls with only a tiny stretch, and the areas still add up to the real skin area.
+def unroll(b_):
+    try:
+        u_ = rg.Unroller(b_)
+        u_.AbsoluteTolerance = max(tol, 0.01)
+        u_.RelativeTolerance = 0.05
+        res = u_.PerformUnroll()
+        out_ = list(res[0]) if isinstance(res, tuple) else list(res)
+        return [p for p in out_ if p]
+    except Exception:
+        return []
+
+def strips(b_):
+    out_ = []
+    for f in b_.Faces:
+        srf = f.UnderlyingSurface()
+        d, sv = max(((d_, list(srf.GetSpanVector(d_))) for d_ in (0, 1)), key=lambda x_: len(x_[1]))
+        cuts = [srf.IsoCurve(1 - d, t_) for t_ in sv[1:-1]]
+        cuts = [c_ for c_ in cuts if c_]
+        sp = f.Split(cuts, tol) if cuts else None
+        if sp and sp.Faces.Count > 1:
+            out_ += [sp.Faces[i].DuplicateFace(False) for i in range(sp.Faces.Count)]
+        else:
+            out_.append(f.DuplicateFace(False))
+    return out_
+
+flat_skin, skin_areas, failed, failed_area = [], [], 0, 0.0
 for i, s in enumerate(skins_in):
     if not s: continue
-    pieces = []
-    try:
-        u_ = rg.Unroller(s)
-        res = u_.PerformUnroll()
-        pieces = list(res[0]) if isinstance(res, tuple) else list(res)
-    except Exception:
-        pieces = []
+    pieces = unroll(s)
     if not pieces:
-        failed += 1
-        continue
+        pieces = []
+        for st_ in strips(s):
+            got = unroll(st_)
+            if got: pieces += got
+            else:
+                failed += 1; failed_area += area(st_)
     for p in pieces:
         place(p)
         a_ = area(p)
@@ -83,5 +109,6 @@ for i, s in enumerate(skins_in):
         labels.append(label(p, "S%d  %.2f sf" % (len(flat_skin), a_)))
 
 print("boards: %d pieces, %.1f sq ft total" % (len(board_areas), sum(board_areas)))
-print("skin:   %d pieces, %.1f sq ft total%s" % (len(skin_areas), sum(skin_areas),
-      ("  (%d piece(s) could not be unrolled)" % failed) if failed else ""))
+print("skin:   %d flat pieces, %.1f sq ft total%s" % (len(skin_areas), sum(skin_areas) + failed_area,
+      ("  (%d strip(s), %.1f sq ft, could not be laid flat but are counted)" % (failed, failed_area)) if failed else ""))
+print("skin pieces received: %d" % len(skins_in))
