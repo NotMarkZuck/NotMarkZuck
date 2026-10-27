@@ -14,11 +14,10 @@ def num(v, d):
 
 boards_in = [rs.coercebrep(b) for b in many(boards) if b is not None]
 def as_brep(g):
-    # accepts the skin as a surface/polysurface, or as a mesh (turned into flat triangles)
+    # accepts the skin as a surface/polysurface, or as a mesh
     b_ = rs.coercebrep(g)
     if b_: return b_
-    m_ = rs.coercemesh(g)
-    return rg.Brep.CreateFromMesh(m_, True) if m_ else None
+    return rs.coercemesh(g)
 skins_in = [as_brep(s) for s in many(skin) if s is not None]
 SPACE = num(space, 1.0)          # gap between pieces on the sheet (ft)
 ROW = num(row, 120.0)            # start a new row after this many feet
@@ -97,14 +96,78 @@ def strips(b_):
             out_.append(f.DuplicateFace(False))
     return out_
 
+def unfold_mesh(g):
+    # fallback that always works: mesh the piece and fold its triangles out flat one by one,
+    # keeping every triangle's true size (so the flat area is exactly the real area)
+    import math
+    from collections import deque
+    if isinstance(g, rg.Mesh): ms = [g]
+    else: ms = list(rg.Mesh.CreateFromBrep(g, rg.MeshingParameters.Default) or [])
+    if not ms: return []
+    m = rg.Mesh()
+    for mm in ms: m.Append(mm)
+    m.Faces.ConvertQuadsToTriangles()
+    key, P3 = {}, []
+    def vid(i):
+        v = m.Vertices[i]
+        k = (round(v.X, 5), round(v.Y, 5), round(v.Z, 5))
+        if k not in key: key[k] = len(P3); P3.append((v.X, v.Y, v.Z))
+        return key[k]
+    T = []
+    for i in range(m.Faces.Count):
+        f = m.Faces[i]
+        t_ = (vid(f.A), vid(f.B), vid(f.C))
+        if len(set(t_)) == 3: T.append(t_)
+    E = {}
+    for fi, t_ in enumerate(T):
+        for e in ((t_[0], t_[1]), (t_[1], t_[2]), (t_[2], t_[0])):
+            E.setdefault(frozenset(e), []).append(fi)
+    def dist(i, j): return sum((P3[i][k] - P3[j][k]) ** 2 for k in range(3)) ** 0.5
+    def third(A, B, ra, rb, ref=None):
+        dx, dy = B[0] - A[0], B[1] - A[1]
+        d = (dx * dx + dy * dy) ** 0.5 or 1e-12
+        a_ = (ra * ra - rb * rb + d * d) / (2 * d)
+        h_ = max(ra * ra - a_ * a_, 0.0) ** 0.5
+        bx, by = A[0] + a_ * dx / d, A[1] + a_ * dy / d
+        c1, c2 = (bx - h_ * dy / d, by + h_ * dx / d), (bx + h_ * dy / d, by - h_ * dx / d)
+        if ref is None: return c1
+        side = lambda p: dx * (p[1] - A[1]) - dy * (p[0] - A[0])
+        return c1 if side(c1) * side(ref) < 0 else c2
+    placed = [None] * len(T)
+    out_ = []
+    for st0 in range(len(T)):
+        if placed[st0] is not None: continue
+        a0, b0, c0 = T[st0]
+        A, B = (0.0, 0.0), (dist(a0, b0), 0.0)
+        placed[st0] = {a0: A, b0: B, c0: third(A, B, dist(a0, c0), dist(b0, c0))}
+        flat = rg.Mesh(); q = deque([st0])
+        while q:
+            fi = q.popleft(); co = placed[fi]; t_ = T[fi]
+            n0 = flat.Vertices.Count
+            for v in t_: flat.Vertices.Add(co[v][0], co[v][1], 0.0)
+            flat.Faces.AddFace(n0, n0 + 1, n0 + 2)
+            for e in ((t_[0], t_[1]), (t_[1], t_[2]), (t_[2], t_[0])):
+                for nf in E[frozenset(e)]:
+                    if placed[nf] is not None: continue
+                    u_, v_ = e
+                    w_ = [x for x in T[nf] if x not in e][0]
+                    opp = [x for x in t_ if x not in e][0]
+                    placed[nf] = {u_: co[u_], v_: co[v_],
+                                  w_: third(co[u_], co[v_], dist(u_, w_), dist(v_, w_), co[opp])}
+                    q.append(nf)
+        flat.Normals.ComputeNormals()
+        out_.append(flat)
+    return out_
+
 flat_skin, skin_areas, failed, failed_area = [], [], 0, 0.0
 for i, s in enumerate(skins_in):
     if not s: continue
-    pieces = unroll(s)
+    pieces = unroll(s) if isinstance(s, rg.Brep) else []
     if not pieces:
-        pieces = []
-        for st_ in strips(s):
-            got = unroll(st_)
+        parts = strips(s) if isinstance(s, rg.Brep) else [s]
+        for st_ in parts:
+            got = unroll(st_) if isinstance(st_, rg.Brep) else []
+            if not got: got = unfold_mesh(st_)
             if got: pieces += got
             else:
                 failed += 1; failed_area += area(st_)
