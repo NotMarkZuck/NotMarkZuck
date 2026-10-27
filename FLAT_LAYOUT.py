@@ -13,7 +13,13 @@ def num(v, d):
     except: return d
 
 boards_in = [rs.coercebrep(b) for b in many(boards) if b is not None]
-skins_in = [rs.coercebrep(s) for s in many(skin) if s is not None]
+def as_brep(g):
+    # accepts the skin as a surface/polysurface, or as a mesh (turned into flat triangles)
+    b_ = rs.coercebrep(g)
+    if b_: return b_
+    m_ = rs.coercemesh(g)
+    return rg.Brep.CreateFromMesh(m_, True) if m_ else None
+skins_in = [as_brep(s) for s in many(skin) if s is not None]
 SPACE = num(space, 1.0)          # gap between pieces on the sheet (ft)
 ROW = num(row, 120.0)            # start a new row after this many feet
 try: o_ = rs.coerce3dpoint(many(origin)[0])
