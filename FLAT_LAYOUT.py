@@ -67,10 +67,10 @@ for i, b in enumerate(boards_in):
 if flat_boards:      # start the skin on a fresh row
     cursor[0] = ORIGIN.X; cursor[1] -= cursor[2] + 3 * SPACE; cursor[2] = 0.0
 
-# ---------- skin: unrolled flat ----------
-# a skin lofted through all the rings bends two ways, so it can't unroll in one go. if that fails,
-# it is cut into one strip per bay (between two rings) - each strip is close to flat-bendable,
-# so it unrolls with only a tiny stretch, and the areas still add up to the real skin area.
+# ---------- skin: laid flat as ONE piece ----------
+# the skin pieces are joined into one surface first. a skin that only bends one way unrolls exactly;
+# one that bends two ways can't be flattened without a little stretch, so it is "squished" flat in one
+# piece (like Rhino's Squish command). the label always shows the TRUE area of the skin.
 def unroll(b_):
     try:
         u_ = rg.Unroller(b_)
@@ -78,23 +78,33 @@ def unroll(b_):
         u_.RelativeTolerance = 0.05
         res = u_.PerformUnroll()
         out_ = list(res[0]) if isinstance(res, tuple) else list(res)
-        return [p for p in out_ if p]
+        out_ = [p for p in out_ if p]
+        if len(out_) > 1:                      # came apart - only accept it if it rejoins into one piece
+            j_ = rg.Brep.JoinBreps(out_, tol)
+            out_ = list(j_) if j_ and len(j_) == 1 else []
+        return out_
     except Exception:
         return []
 
-def strips(b_):
-    out_ = []
-    for f in b_.Faces:
-        srf = f.UnderlyingSurface()
-        d, sv = max(((d_, list(srf.GetSpanVector(d_))) for d_ in (0, 1)), key=lambda x_: len(x_[1]))
-        cuts = [srf.IsoCurve(1 - d, t_) for t_ in sv[1:-1]]
-        cuts = [c_ for c_ in cuts if c_]
-        sp = f.Split(cuts, tol) if cuts else None
-        if sp and sp.Faces.Count > 1:
-            out_ += [sp.Faces[i].DuplicateFace(False) for i in range(sp.Faces.Count)]
-        else:
-            out_.append(f.DuplicateFace(False))
-    return out_
+def to_mesh(g):
+    if isinstance(g, rg.Mesh): return g
+    mp = rg.MeshingParameters.Default
+    mp.MaximumEdgeLength = 0.5
+    ms = rg.Mesh.CreateFromBrep(g, mp)
+    if not ms: return None
+    m = rg.Mesh()
+    for mm in ms: m.Append(mm)
+    m.Weld(3.14159)
+    return m
+
+def squish(g):
+    try:
+        m = to_mesh(g)
+        if m is None: return []
+        res = rg.Squisher().SquishMesh(rg.SquishParameters(), m)
+        return [res] if res else []
+    except Exception:
+        return []
 
 def unfold_mesh(g):
     # fallback that always works: mesh the piece and fold its triangles out flat one by one,
@@ -159,25 +169,30 @@ def unfold_mesh(g):
         out_.append(flat)
     return out_
 
-flat_skin, skin_areas, failed, failed_area = [], [], 0, 0.0
-for i, s in enumerate(skins_in):
-    if not s: continue
-    pieces = unroll(s) if isinstance(s, rg.Brep) else []
-    if not pieces:
-        parts = strips(s) if isinstance(s, rg.Brep) else [s]
-        for st_ in parts:
-            got = unroll(st_) if isinstance(st_, rg.Brep) else []
-            if not got: got = unfold_mesh(st_)
-            if got: pieces += got
-            else:
-                failed += 1; failed_area += area(st_)
-    for p in pieces:
-        place(p)
-        a_ = area(p)
-        flat_skin.append(p); skin_areas.append(a_)
-        labels.append(label(p, "S%d  %.2f sf" % (len(flat_skin), a_)))
+flat_skin, skin_areas, how = [], [], []
+breps_ = [g for g in skins_in if isinstance(g, rg.Brep)]
+meshes_ = [g for g in skins_in if isinstance(g, rg.Mesh)]
+joined_ = list(rg.Brep.JoinBreps(breps_, tol) or breps_) if breps_ else []
+if meshes_:
+    mj = rg.Mesh()
+    for mm in meshes_: mj.Append(mm)
+    joined_.append(mj)
+for s in joined_:
+    true_area = area(s)
+    flat = unroll(s) if isinstance(s, rg.Brep) else []
+    method = "unrolled exactly"
+    if not flat:
+        flat = squish(s); method = "squished (slight stretch)"
+    if not flat:
+        parts = unfold_mesh(to_mesh(s)) or []
+        flat = [max(parts, key=area)] if parts else []; method = "unfolded"
+    if not flat: continue
+    p = flat[0]
+    place(p)
+    flat_skin.append(p); skin_areas.append(true_area); how.append(method)
+    labels.append(label(p, "SKIN %d  %.1f sf" % (len(flat_skin), true_area)))
 
 print("boards: %d pieces, %.1f sq ft total" % (len(board_areas), sum(board_areas)))
-print("skin:   %d flat pieces, %.1f sq ft total%s" % (len(skin_areas), sum(skin_areas) + failed_area,
-      ("  (%d strip(s), %.1f sq ft, could not be laid flat but are counted)" % (failed, failed_area)) if failed else ""))
-print("skin pieces received: %d" % len(skins_in))
+for i, (a_, h_) in enumerate(zip(skin_areas, how)):
+    print("skin %d: %.1f sq ft (true area) - %s" % (i + 1, a_, h_))
+print("skin total: %.1f sq ft | skin pieces received: %d, joined into %d" % (sum(skin_areas), len(skins_in), len(joined_)))
