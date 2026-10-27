@@ -47,25 +47,79 @@ def place(g):
 def label(g, txt):
     return rg.TextDot(txt, g.GetBoundingBox(True).Center)
 
-# ---------- boards: each plank is flat, so its biggest face is laid straight down on the plane ----------
+# ---------- boards ----------
+# with the ring curves plugged into 'rings', the boards are unrolled IN PLACE: the bridge is opened out
+# like a sleeve, so every board sits where it really is - across the page = along the bridge,
+# up the page = around the ring (measured from the middle of each ring's arc). sizes and the 3" gaps
+# come out true to within a fraction of an inch. without 'rings' they are laid out in rows instead.
+import math
 flat_boards, board_areas, labels = [], [], []
+try: ring_crvs = [rs.coercecurve(c) for c in many(rings) if c is not None]
+except NameError: ring_crvs = []
+ring_crvs = [c for c in ring_crvs if c]
+
+def V3(p): return rg.Vector3d(p.X, p.Y, p.Z)
+R_ = []
+for c in ring_crvs:
+    ok, arc = c.TryGetArc(0.01)
+    if not ok: continue
+    cen, rad = arc.Center, arc.Radius
+    mid = c.PointAt(c.Domain.Mid)
+    R_.append((cen, rad, mid))
+R_.sort(key=lambda r: r[0].X)
+
+def unwrap(P):
+    # world point -> (along the bridge, around the ring) for the opened-out map
+    if len(R_) < 2: return None
+    k = 0
+    while k < len(R_) - 2 and P.X > R_[k + 1][0].X: k += 1
+    (c0, r0, m0), (c1, r1, m1) = R_[k], R_[k + 1]
+    D = c1 - c0
+    seg = D.Length; D.Unitize()
+    f = ((P - c0) * D) / seg if seg > 1e-9 else 0.0
+    C = c0 + (c1 - c0) * f
+    rad = r0 + (r1 - r0) * f
+    ref = (m0 - c0) * (1 - f) + (m1 - c1) * f           # middle of the arc, blended between the two rings
+    ref = ref - D * (ref * D); ref.Unitize()
+    side = rg.Vector3d.CrossProduct(D, ref)
+    r = P - C
+    r = r - D * (r * D)
+    th = math.atan2(r * side, r * ref)
+    along = sum((R_[i + 1][0] - R_[i][0]).Length for i in range(k)) + seg * f
+    return rg.Point3d(ORIGIN.X + along, ORIGIN.Y + th * rad, 0)
+
 for i, b in enumerate(boards_in):
     if not b: continue
     face = max(b.Faces, key=lambda f_: area(f_.DuplicateFace(False)))
     fb = face.DuplicateFace(False)
-    ok, pl = face.TryGetPlane(tol)
-    if not ok: continue
-    edges = sorted(fb.Edges, key=lambda e: e.GetLength(), reverse=True)
-    x = edges[0].PointAtEnd - edges[0].PointAtStart          # lay the plank along X
-    src = rg.Plane(fb.GetBoundingBox(True).Center, x, rg.Vector3d.CrossProduct(pl.Normal, x))
-    fb.Transform(rg.Transform.PlaneToPlane(src, rg.Plane.WorldXY))
-    place(fb)
     a_ = area(fb)
+    if R_ and len(R_) > 1:
+        loop = rg.Curve.JoinCurves(fb.DuplicateEdgeCurves(True), tol)
+        if not loop: continue
+        crv_ = loop[0]
+        okp, poly = crv_.TryGetPolyline()
+        pts_ = list(poly)[:-1] if okp else [crv_.PointAt(t_) for t_ in crv_.DivideByCount(24, True)]
+        flat_pts = [unwrap(p) for p in pts_]
+        if any(p is None for p in flat_pts): continue
+        flat_pts.append(flat_pts[0])
+        pb = rg.Brep.CreatePlanarBreps(rg.PolylineCurve(flat_pts), tol)
+        if not pb: continue
+        fb = pb[0]
+    else:
+        ok, pl = face.TryGetPlane(tol)
+        if not ok: continue
+        edges = sorted(fb.Edges, key=lambda e: e.GetLength(), reverse=True)
+        x = edges[0].PointAtEnd - edges[0].PointAtStart          # lay the plank along X
+        src = rg.Plane(fb.GetBoundingBox(True).Center, x, rg.Vector3d.CrossProduct(pl.Normal, x))
+        fb.Transform(rg.Transform.PlaneToPlane(src, rg.Plane.WorldXY))
+        place(fb)
     flat_boards.append(fb); board_areas.append(a_)
     labels.append(label(fb, "B%d  %.2f sf" % (i + 1, a_)))
 
-if flat_boards:      # start the skin on a fresh row
-    cursor[0] = ORIGIN.X; cursor[1] -= cursor[2] + 3 * SPACE; cursor[2] = 0.0
+if flat_boards:      # start the skin on a fresh row, below the boards
+    bbb = rg.BoundingBox.Empty
+    for fb in flat_boards: bbb.Union(fb.GetBoundingBox(True))
+    cursor[0] = ORIGIN.X; cursor[1] = min(cursor[1] - cursor[2], bbb.Min.Y) - 3 * SPACE; cursor[2] = 0.0
 
 # ---------- skin: laid flat as ONE piece ----------
 # the skin pieces are joined into one surface first. a skin that only bends one way unrolls exactly;
