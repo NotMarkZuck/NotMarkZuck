@@ -223,30 +223,195 @@ def unfold_mesh(g):
         out_.append(flat)
     return out_
 
+# ---------- skin rebuilt from flat panels (needs 'rings') ----------
+# the skin is redrawn as narrow strips running along the bridge, each strip made of flat triangles
+# (straight edges only). a strip like that can be laid flat EXACTLY - no stretch, no overlap - and
+# each flat strip is put back where it sits on the opened-out bridge, so the whole skin keeps its
+# shape on the page, like the gores of a globe map. thin wedge gaps between strips show where the
+# real skin curves two ways. the real skin is not changed - this is a separate copy.
+def tri_area2(p, q, r):
+    u = (q[0] - p[0], q[1] - p[1], q[2] - p[2]); v = (r[0] - p[0], r[1] - p[1], r[2] - p[2])
+    c = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+    return 0.5 * (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) ** 0.5
+
+def build_strips(n_st, n_col, hit, thetas):
+    # hit(i, th) -> ((x, y, z), map_xy) or None. returns strips: [(nodes, mapc, tris)]
+    cache = {}
+    def node(i, j):
+        if (i, j) not in cache: cache[(i, j)] = hit(i, thetas[j])
+        return cache[(i, j)]
+    edge_cache = {}
+    def corner(i, j, jo):
+        # the corner itself if it is on the skin, else the skin's edge between it and its partner jo
+        h = node(i, j)
+        if h: return ((i, j), h)
+        if not node(i, jo): return None
+        key = (i, j, jo)
+        if key not in edge_cache:
+            t_in, t_out = thetas[jo], thetas[j]
+            best = node(i, jo)
+            for _ in range(14):
+                tm = 0.5 * (t_in + t_out)
+                hm = hit(i, tm)
+                if hm: t_in, best = tm, hm
+                else: t_out = tm
+            edge_cache[key] = best
+        return ((i, j, 'e', jo), edge_cache[key])
+    strips_ = []
+    for j in range(n_col - 1):
+        run = []
+        for i in range(n_st - 1):
+            cs = [corner(i, j, j + 1), corner(i, j + 1, j), corner(i + 1, j + 1, j), corner(i + 1, j, j + 1)]
+            if any(c is None for c in cs):
+                if run: strips_.append(run); run = []
+                continue
+            run.append(cs)
+        if run: strips_.append(run)
+    out_ = []
+    for run in strips_:
+        nodes, mapc, tris = {}, {}, []
+        for a_, b_, c_, d_ in run:
+            for k_, (P, M) in (a_, b_, c_, d_):
+                nodes[k_] = P; mapc[k_] = M
+            for t_ in ((a_[0], b_[0], c_[0]), (a_[0], c_[0], d_[0])):
+                if tri_area2(nodes[t_[0]], nodes[t_[1]], nodes[t_[2]]) > 1e-9: tris.append(t_)
+        if tris: out_.append((nodes, mapc, tris))
+    return out_
+
+def unfold_chain(nodes, mapc, tris):
+    # lays a strip of triangles flat one after another (exact), then turns/moves it onto its map spot
+    def d3(a_, b_): return sum((nodes[a_][k] - nodes[b_][k]) ** 2 for k in range(3)) ** 0.5
+    def third(A, B, ra, rb, ref=None):
+        dx, dy = B[0] - A[0], B[1] - A[1]
+        d = (dx * dx + dy * dy) ** 0.5 or 1e-12
+        a_ = (ra * ra - rb * rb + d * d) / (2 * d)
+        h_ = max(ra * ra - a_ * a_, 0.0) ** 0.5
+        bx, by = A[0] + a_ * dx / d, A[1] + a_ * dy / d
+        c1, c2 = (bx - h_ * dy / d, by + h_ * dx / d), (bx + h_ * dy / d, by - h_ * dx / d)
+        if ref is None: return c1
+        side = lambda p: dx * (p[1] - A[1]) - dy * (p[0] - A[0])
+        return c1 if side(c1) * side(ref) < 0 else c2
+    m = len(tris) // 2
+    a0, b0, c0 = tris[m]
+    F = {a0: (0.0, 0.0), b0: (d3(a0, b0), 0.0)}
+    F[c0] = third(F[a0], F[b0], d3(a0, c0), d3(b0, c0))
+    def walk(order, prev):
+        for t_ in order:
+            new = [v for v in t_ if v not in F]
+            if len(new) != 1: prev = t_; continue
+            w_ = new[0]; u_, v_ = [v for v in t_ if v != w_]
+            opp = [v for v in prev if v not in (u_, v_)]
+            ref = F[opp[0]] if opp and opp[0] in F else None
+            F[w_] = third(F[u_], F[v_], d3(u_, w_), d3(v_, w_), ref)
+            prev = t_
+    walk(tris[m + 1:], tris[m])
+    walk(tris[:m][::-1], tris[m])
+    # match the map: mirror if needed, then rotate and move onto the map position of the middle triangle
+    def cross2(p, q, r): return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    if cross2(F[a0], F[b0], F[c0]) * cross2(mapc[a0], mapc[b0], mapc[c0]) < 0:
+        F = {k_: (x, -y) for k_, (x, y) in F.items()}
+    ang = (math.atan2(mapc[b0][1] - mapc[a0][1], mapc[b0][0] - mapc[a0][0])
+           - math.atan2(F[b0][1] - F[a0][1], F[b0][0] - F[a0][0]))
+    ca, sa = math.cos(ang), math.sin(ang)
+    ox, oy = F[a0]; mx, my = mapc[a0]
+    return {k_: (mx + ca * (x - ox) - sa * (y - oy), my + sa * (x - ox) + ca * (y - oy)) for k_, (x, y) in F.items()}
+
+try: STRIP = float(many(strip)[0])          # strip width around the ring (ft)
+except: STRIP = 2.0
+try: SUB = max(int(round(float(many(sub)[0]))), 1)   # points per bay along the bridge
+except: SUB = 3
+
+panels3d, panel_area = None, 0.0
 flat_skin, skin_areas, how = [], [], []
-breps_ = [g for g in skins_in if isinstance(g, rg.Brep)]
-meshes_ = [g for g in skins_in if isinstance(g, rg.Mesh)]
-joined_ = list(rg.Brep.JoinBreps(breps_, tol) or breps_) if breps_ else []
-if meshes_:
-    mj = rg.Mesh()
-    for mm in meshes_: mj.Append(mm)
-    joined_.append(mj)
-for s in joined_:
-    true_area = area(s)
-    flat = unroll(s) if isinstance(s, rg.Brep) else []
-    method = "unrolled exactly"
-    if not flat:
-        flat = squish(s); method = "squished (slight stretch)"
-    if not flat:
-        parts = unfold_mesh(to_mesh(s)) or []
-        flat = [max(parts, key=area)] if parts else []; method = "unfolded"
-    if not flat: continue
-    p = flat[0]
-    place(p)
-    flat_skin.append(p); skin_areas.append(true_area); how.append(method)
-    labels.append(label(p, "SKIN %d  %.1f sf" % (len(flat_skin), true_area)))
+if len(R_) > 1 and skins_in:
+    msk = rg.Mesh()
+    for g_ in skins_in:
+        if isinstance(g_, rg.Mesh): msk.Append(g_)
+        else:
+            mp_ = rg.MeshingParameters.Default; mp_.MaximumEdgeLength = 1.0
+            for mm in (rg.Mesh.CreateFromBrep(g_, mp_) or []): msk.Append(mm)
+    true_area = sum(area(g_) for g_ in skins_in)
+    # stations along the bridge: every ring, plus SUB-1 in between
+    ST = []
+    along0 = 0.0
+    for k in range(len(R_) - 1):
+        (c0, r0, m0), (c1, r1, m1) = R_[k], R_[k + 1]
+        D = c1 - c0; seg = D.Length; D.Unitize()
+        for q in range(SUB + (1 if k == len(R_) - 2 else 0)):
+            f = q / float(SUB)
+            C = c0 + (c1 - c0) * f
+            ref = (m0 - c0) * (1 - f) + (m1 - c1) * f
+            ref = ref - D * (ref * D); ref.Unitize()
+            ST.append((C, ref, rg.Vector3d.CrossProduct(D, ref), along0 + seg * f))
+        along0 += seg
+    rmax = max(r for _, r, _ in R_) + 2.0
+    n_col = max(int(math.ceil(2 * math.pi * rmax / STRIP)), 8) + 1
+    thetas = [-math.pi + 2 * math.pi * j / (n_col - 1) for j in range(n_col)]
+    def hit(i, th):
+        C, ref, side, along = ST[i]
+        dvec = ref * math.cos(th) + side * math.sin(th)
+        t_ = rg.Intersect.Intersection.MeshRay(msk, rg.Ray3d(C, dvec))
+        if t_ is None or t_ < 0: return None
+        P = C + dvec * t_
+        r = P.DistanceTo(C)
+        return ((P.X, P.Y, P.Z), (ORIGIN.X + along, ORIGIN.Y + th * r))
+    strips3 = build_strips(len(ST), n_col, hit, thetas)
+    panels3d = rg.Mesh()
+    flats = []
+    for nodes, mapc, tris in strips3:
+        n0 = panels3d.Vertices.Count; idx = {}
+        for k_, P in nodes.items():
+            idx[k_] = panels3d.Vertices.Count; panels3d.Vertices.Add(P[0], P[1], P[2])
+        for t_ in tris:
+            panels3d.Faces.AddFace(idx[t_[0]], idx[t_[1]], idx[t_[2]])
+            panel_area += tri_area2(nodes[t_[0]], nodes[t_[1]], nodes[t_[2]])
+        F2 = unfold_chain(nodes, mapc, tris)
+        fm = rg.Mesh(); fi = {}
+        for k_, (x, y) in F2.items():
+            fi[k_] = fm.Vertices.Count; fm.Vertices.Add(x, y, 0.0)
+        for t_ in tris: fm.Faces.AddFace(fi[t_[0]], fi[t_[1]], fi[t_[2]])
+        fm.Normals.ComputeNormals()
+        flats.append(fm)
+    panels3d.Normals.ComputeNormals()
+    if flats:
+        # slide the whole skin map down so it sits below the boards (lined up along the bridge with them)
+        gb = rg.BoundingBox.Empty
+        for fm in flats: gb.Union(fm.GetBoundingBox(True))
+        top = (cursor[1] if flat_boards else ORIGIN.Y)
+        mv = rg.Transform.Translation(0, top - gb.Max.Y, 0)
+        for fm in flats: fm.Transform(mv)
+        flat_skin = flats
+        skin_areas = [true_area]
+        how = ["%d flat strips of straight-edged panels, unrolled exactly (panel area %.1f sf)" % (len(flats), panel_area)]
+        gb = rg.BoundingBox.Empty
+        for fm in flats: gb.Union(fm.GetBoundingBox(True))
+        labels.append(rg.TextDot("SKIN  %.1f sf (panels %.1f sf)" % (true_area, panel_area), gb.Center))
+
+if not flat_skin:
+    breps_ = [g for g in skins_in if isinstance(g, rg.Brep)]
+    meshes_ = [g for g in skins_in if isinstance(g, rg.Mesh)]
+    joined_ = list(rg.Brep.JoinBreps(breps_, tol) or breps_) if breps_ else []
+    if meshes_:
+        mj = rg.Mesh()
+        for mm in meshes_: mj.Append(mm)
+        joined_.append(mj)
+    for s in joined_:
+        true_area = area(s)
+        flat = unroll(s) if isinstance(s, rg.Brep) else []
+        method = "unrolled exactly"
+        if not flat:
+            flat = squish(s); method = "squished (slight stretch)"
+        if not flat:
+            parts = unfold_mesh(to_mesh(s)) or []
+            flat = [max(parts, key=area)] if parts else []; method = "unfolded"
+        if not flat: continue
+        p = flat[0]
+        place(p)
+        flat_skin.append(p); skin_areas.append(true_area); how.append(method)
+        labels.append(label(p, "SKIN %d  %.1f sf" % (len(flat_skin), true_area)))
+
 
 print("boards: %d pieces, %.1f sq ft total" % (len(board_areas), sum(board_areas)))
 for i, (a_, h_) in enumerate(zip(skin_areas, how)):
     print("skin %d: %.1f sq ft (true area) - %s" % (i + 1, a_, h_))
-print("skin total: %.1f sq ft | skin pieces received: %d, joined into %d" % (sum(skin_areas), len(skins_in), len(joined_)))
+print("skin pieces received: %d" % len(skins_in))
