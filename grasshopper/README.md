@@ -45,6 +45,10 @@ and choose **Bake** to turn them into real Rhino objects.
 | FloorHeight | 10 | Floor-to-floor height |
 | CorridorWidth | 5 | Corridor width |
 
+The line can be straight, have corners (L, U, Z shapes drawn with the `Polyline`
+command), be a smooth curve, or be a closed loop (no end units then). At corners
+the units meet on an angle so nothing overlaps.
+
 Typical units are stretched slightly so they always fill the corridor exactly
 with no leftover gap. Each end unit spans the full width of the building
 (both unit rows plus the corridor), so it closes off the end of the corridor.
