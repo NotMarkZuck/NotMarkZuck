@@ -24,8 +24,10 @@ The script is in `apartment_bar.py`. Set your Rhino file units to **Feet**.
 8. Double-click the component, delete what's in there, paste in all of
    `apartment_bar.py`, and click **OK**.
 9. Connect things:
-   - Add a **Curve** component, right-click it, choose **Set one Curve**, click your
-     Rhino line. Connect it to `Line`.
+   - Add a **Curve** component (Params tab → Geometry → **Curve**, not **Line**),
+     right-click it, choose **Set one Curve**, then click your Rhino line. Connect it
+     to `Line`. (The **Line** component's "Set one Line" makes you draw a new line
+     instead of picking the one you already drew.)
    - Add a **Number Slider**, set it to whole numbers (e.g. 1 to 10). Connect it to `Floors`.
    - The other inputs are optional (defaults below). Add sliders if you want to adjust them.
    - Connect a **Panel** to `Info` to see unit counts.
