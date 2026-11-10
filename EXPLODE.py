@@ -18,6 +18,10 @@ def find_layer(name):
     return None
 
 
+def get_layer(name, colour):
+    return name if rs.IsLayer(name) else rs.AddLayer(name, colour)
+
+
 def ring_centre(obj_id):
     g = rs.coercegeometry(obj_id)
     crv = g if isinstance(g, rg.Curve) else None
@@ -60,7 +64,7 @@ def main():
 
     rs.EnableRedraw(False)
     try:
-        ax_layer = rs.AddLayer("explode centre line", (255, 0, 0))
+        ax_layer = get_layer("explode centre line", (255, 0, 0))
         rs.ObjectLayer(rs.AddPolyline(centres), ax_layer)
         report = []
         for name, d in LAYERS:
@@ -69,7 +73,7 @@ def main():
             if not objs:
                 report.append("%s: layer not found or empty" % name)
                 continue
-            new_layer = rs.AddLayer(src.split("::")[-1] + " EXPLODED", rs.LayerColor(src))
+            new_layer = get_layer(src.split("::")[-1] + " EXPLODED", rs.LayerColor(src))
             copies = rs.CopyObjects(objs) or []
             rs.ObjectLayer(copies, new_layer)
             if name in BREAK_UP:
