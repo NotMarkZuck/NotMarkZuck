@@ -67,7 +67,8 @@ def main():
         ax_layer = get_layer("explode centre line", (255, 0, 0))
         rs.ObjectLayer(rs.AddPolyline(centres), ax_layer)
         report = []
-        for name, d in LAYERS:
+        for name, _ in LAYERS:
+            d = dist[name]
             src = find_layer(name)
             objs = rs.ObjectsByLayer(src) if src else None
             if not objs:
